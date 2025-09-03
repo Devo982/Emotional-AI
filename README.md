@@ -1,4 +1,7 @@
 # NOTE
+
+Dataset used is from "WASSA 2017 Shared Task on Emotion Intensity"
+
 Steps:
 1. Run Dataset_splitter.py first to split data into test,training and validation datasets.
 2. Train the models using "Train.py"
