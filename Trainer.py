@@ -1,192 +1,162 @@
-import os
 import numpy as np
 import pandas as pd
+from sklearn.model_selection import train_test_split
 import torch
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler
-from transformers import BertModel, BertTokenizer
+from transformers import DistilBertModel, DistilBertTokenizer
 import torch.nn as nn
 import time
 from torch.optim import AdamW
-from sklearn.metrics import mean_squared_error
+from torch.nn import MSELoss
 import warnings
-import re
-import unicodedata
 
 warnings.filterwarnings('ignore')
 
-# Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
+print("Using device:", device)
 
-# Constants
-EMOTIONS = ['anger', 'fear', 'joy', 'sadness']
-MAX_LEN = 128
-BATCH_SIZE = 8
-EPOCHS = 10
-LR = 1e-6
+emotions = [ 'anger']
 
-# Model class
-class BERTForRegression(nn.Module):
-    def __init__(self, bert_model_name='disbert-base-uncased'):
-        super(BERTForRegression, self).__init__()
-        self.bert = BertModel.from_pretrained(bert_model_name)
-        self.regression_layer = nn.Linear(self.bert.config.hidden_size, 1)
-    
-    def forward(self, input_ids, attention_mask):
-        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
-        pooled_output = outputs.last_hidden_state[:, 0, :]
-        return self.regression_layer(pooled_output)
+for i in emotions:
+    print(f"\n🔁 Running training for {i}")
+    df_path = f'tuned_data\\{i}'
+    tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
 
-def clean_tweet(text):
-    """Clean tweet text by removing emojis, special characters, and unnecessary spaces."""
-    # Normalize unicode
-    text = unicodedata.normalize('NFKD', text)
-    
-    # Remove emojis and symbols beyond Basic Multilingual Plane
-    text = text.encode('ascii', 'ignore').decode('ascii')
-    
-    # Remove unusual control characters (excluding newlines and tabs)
-    text = re.sub(r'[\x00-\x1F\x7F-\x9F]', '', text)
-    
-    # Remove excessive whitespace
-    text = re.sub(r'\s+', ' ', text).strip()
-    
-    return text
+    train_df = pd.read_csv(f'{df_path}\\{i}_training_data.csv', sep='\t')
+    val_df = pd.read_csv(f'{df_path}\\{i}_validation_data.csv', sep='\t')
 
-# Training function
-# Training function
-def train(model, train_loader, val_loader, loss_fn, optimizer, device, save_path, epochs=EPOCHS):
-    # Ensure model is on the correct device
-    model.to(device)
-
-    if os.path.exists(save_path):
-        checkpoint = torch.load(save_path, map_location=device)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        best_val_loss = checkpoint.get('val_loss', float('inf'))
-        print(f"📂 Loaded checkpoint with best val loss: {best_val_loss:.4f}")
-    else:
-        best_val_loss = 1e10
-
-    for epoch in range(epochs):
-        model.train()
-        running_loss = 0.0
-        start_time = time.time()
-
-        for batch in train_loader:
-            input_ids = batch[0].to(device)  # Ensure input_ids are on the correct device
-            attention_mask = batch[1].to(device)  # Ensure attention_mask is on the correct device
-            labels = batch[2].to(device)  # Ensure labels are on the correct device
-
-            if torch.isnan(input_ids).any() or torch.isnan(labels).any():
-                print("⚠️ NaNs detected in training batch")
-                continue
-
-            optimizer.zero_grad()
-            outputs = model(input_ids, attention_mask).squeeze()
-            outputs = torch.clamp(outputs, 0.0, 1.0)  # Ensure outputs are within the desired range
-            loss = loss_fn(outputs, labels)
-            if torch.isnan(loss):
-                print("⚠️ NaN loss detected during training")
-                continue
-
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-            running_loss += loss.item()
-
-        avg_train_loss = running_loss / len(train_loader)
-        print(f"Epoch {epoch+1}/{epochs} | Train Loss: {avg_train_loss:.4f}")
-
-        # Validation
-        model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for batch in val_loader:
-                input_ids = batch[0].to(device)  # Ensure input_ids are on the correct device
-                attention_mask = batch[1].to(device)  # Ensure attention_mask is on the correct device
-                labels = batch[2].to(device)  # Ensure labels are on the correct device
-
-                outputs = model(input_ids, attention_mask).squeeze()
-                outputs = torch.clamp(outputs, 0.0, 1.0)  # Ensure outputs are within the desired range
-                loss = loss_fn(outputs, labels)
-
-                if torch.isnan(loss):
-                    print("⚠️ NaN loss in validation")
-                    continue
-
-                val_loss += loss.item()
-
-        avg_val_loss = val_loss / len(val_loader)
-        print(f"Validation Loss: {avg_val_loss:.4f}")
-
-        if not torch.isnan(torch.tensor(avg_val_loss)) and not torch.isinf(torch.tensor(avg_val_loss)):
-            if avg_val_loss < best_val_loss and avg_val_loss != 0:
-                best_val_loss = avg_val_loss
-                torch.save({
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'val_loss': avg_val_loss},
-                    save_path)
-                print(f"✅ Best model saved with val loss {avg_val_loss:.4f}")
-        else:
-            print(f"⚠️ Skipping checkpoint due to invalid val loss: {avg_val_loss}")
-
-        print(f"Epoch Time: {time.time() - start_time:.2f}s")
-        print('-' * 60)
-
-
-# Tokenization helper
-def tokenize_data(df, tokenizer):
-    input_ids, attention_masks, labels = [], [], []
-    for tweet, intensity in zip(df['Tweet'], df['Intensity']):
-        if pd.isna(tweet) or pd.isna(intensity):
-            continue
-        try:
-            tweet = clean_tweet(str(tweet))
-            intensity = float(intensity)
+    def encode_data(df):
+        input_ids, attention_masks, labels = [], [], []
+        for tweet, intensity in zip(df['Tweet'], df['Intensity']):
             encoded = tokenizer.encode_plus(
                 tweet,
                 add_special_tokens=True,
-                max_length=MAX_LEN,
+                max_length=128,
                 padding='max_length',
                 truncation=True,
                 return_attention_mask=True,
                 return_tensors='pt'
             )
-            input_ids.append(encoded['input_ids'].squeeze(0))
-            attention_masks.append(encoded['attention_mask'].squeeze(0))
-            labels.append(intensity)
-        except Exception as e:
-            print(f"⚠️ Skipping problematic entry: {tweet[:30]} | {e}")
-            continue
+            input_ids.append(encoded['input_ids'].squeeze())
+            attention_masks.append(encoded['attention_mask'].squeeze())
+            labels.append(float(intensity))
+        return (
+            torch.stack(input_ids),
+            torch.stack(attention_masks),
+            torch.tensor(labels, dtype=torch.float32)
+        )
 
-    return TensorDataset(
-        torch.stack(input_ids),
-        torch.stack(attention_masks),
-        torch.tensor(labels, dtype=torch.float32)
-    )
+    train_input_ids, train_attention_masks, train_labels = encode_data(train_df)
+    val_input_ids, val_attention_masks, val_labels = encode_data(val_df)
 
-# Main loop
-for emotion in EMOTIONS:
-    print(f"\n🔄 Processing {emotion.upper()}")
+    train_dataset = TensorDataset(train_input_ids, train_attention_masks, train_labels)
+    val_dataset = TensorDataset(val_input_ids, val_attention_masks, val_labels)
 
-    df_path = f'tuned_data\\{emotion}'
-    train_df = pd.read_csv(f'{df_path}\\{emotion}_training_data.csv', sep='\t')
-    val_df = pd.read_csv(f'{df_path}\\{emotion}_validation_data.csv', sep='\t')
+    batch_size = 32
+    train_loader = DataLoader(train_dataset, sampler=RandomSampler(train_dataset), batch_size=batch_size)
+    val_loader = DataLoader(val_dataset, sampler=RandomSampler(val_dataset), batch_size=batch_size)
 
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-    train_dataset = tokenize_data(train_df, tokenizer)
-    val_dataset = tokenize_data(val_df, tokenizer)
+    class DistilBERTForRegression(nn.Module):
+        def __init__(self):
+            super(DistilBERTForRegression, self).__init__()
+            self.bert = DistilBertModel.from_pretrained('distilbert-base-uncased')
+            self.regressor = nn.Linear(self.bert.config.hidden_size, 1)
+            self.sigmoid = nn.Sigmoid()
 
-    train_loader = DataLoader(train_dataset, sampler=RandomSampler(train_dataset), batch_size=BATCH_SIZE)
-    val_loader = DataLoader(val_dataset, sampler=RandomSampler(val_dataset), batch_size=BATCH_SIZE)
+        def forward(self, input_ids, attention_mask):
+            outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+            pooled_output = outputs.last_hidden_state[:, 0]
+            return self.sigmoid(self.regressor(pooled_output))
 
-    model = BERTForRegression()
-    optimizer = AdamW(model.parameters(), lr=LR)
-    loss_fn = nn.MSELoss()
+    model = DistilBERTForRegression().to(device)
+    loss_fn = MSELoss()
+    optimizer = AdamW(model.parameters(), lr=1e-5)
 
-    model_path = f'models\\bert_regression_{emotion}.pt'
-    train(model, train_loader, val_loader, loss_fn, optimizer, device, model_path)
+    def has_nan_or_inf(tensor):
+        return torch.isnan(tensor).any().item() or torch.isinf(tensor).any().item()
 
-print("\n✅ Training complete for all emotions.")
+    def train(model, train_loader, val_loader, loss_fn, optimizer, device, num_epochs=10):
+        best_val_loss = float('inf')
+
+        for epoch in range(num_epochs):
+            model.train()
+            running_loss = 0.0
+            start_time = time.time()
+            nan_batch_count = 0
+
+            for step, batch in enumerate(train_loader):
+                input_ids = batch[0].to(device)
+                attention_mask = batch[1].to(device)
+                labels = batch[2].to(device)
+
+                # Check inputs for NaNs or Infs
+                if any([
+                    has_nan_or_inf(input_ids),
+                    has_nan_or_inf(attention_mask),
+                    has_nan_or_inf(labels)
+                ]):
+                    print(f"🚨 Skipping batch {step} due to NaN/Inf in inputs/labels")
+                    nan_batch_count += 1
+                    continue
+
+                optimizer.zero_grad()
+                outputs = model(input_ids, attention_mask)
+
+                if has_nan_or_inf(outputs):
+                    print(f"🚨 Skipping batch {step} due to NaN/Inf in outputs")
+                    nan_batch_count += 1
+                    continue
+
+                loss = loss_fn(outputs.squeeze(), labels)
+
+                if torch.isnan(loss) or torch.isinf(loss):
+                    print(f"❌ NaN loss encountered at batch {step}, skipping update.")
+                    nan_batch_count += 1
+                    continue
+
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # removing out of bound values
+                optimizer.step()
+
+                if any([has_nan_or_inf(p.grad) for p in model.parameters() if p.grad is not None]):
+                    print(f"💥 Gradient explosion detected at batch {step}, skipping optimizer step")
+                    nan_batch_count += 1
+                    continue
+
+                optimizer.step()
+                running_loss += loss.item()
+
+                if step % 10 == 0:
+                    print(f"[Batch {step}] Loss: {loss.item():.4f}")
+
+            avg_train_loss = running_loss / (len(train_loader) - nan_batch_count + 1e-6)
+            print(f"✅ Epoch {epoch + 1}: Train Loss = {avg_train_loss:.4f} | Skipped Batches: {nan_batch_count}")
+
+            # Validation
+            model.eval()
+            val_loss = 0.0
+            with torch.no_grad():
+                for val_batch in val_loader:
+                    input_ids = val_batch[0].to(device)
+                    attention_mask = val_batch[1].to(device)
+                    labels = val_batch[2].to(device)
+                    outputs = model(input_ids, attention_mask)
+
+                    if has_nan_or_inf(outputs):
+                        print("🚫 Skipping val batch due to NaNs")
+                        break
+
+                    loss = loss_fn(outputs.squeeze(), labels)
+                    val_loss += loss.item()
+
+            avg_val_loss = val_loss / len(val_loader)
+            print(f"🧪 Validation Loss: {avg_val_loss:.4f}")
+
+            if avg_val_loss < best_val_loss and avg_val_loss!=0:
+                best_val_loss = avg_val_loss
+                torch.save(model.state_dict(), f'models/bert_regression_{i}.pt')
+                print(f"💾 Saved best model for {i} with val loss {avg_val_loss:.4f}")
+
+            print(f"⏱️ Epoch Time: {time.time() - start_time:.2f}s\n" + "-" * 50)
+
+    train(model, train_loader, val_loader, loss_fn, optimizer, device)
