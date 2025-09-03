@@ -1,3 +1,8 @@
+# NOTE
+
+Need to train the models using "Train.py" before using.
+and require LM Studio Server running and connect the API in "Run.py" for responses.
+
 # 🌌 Emotional-AI
 
 An **Emotion-Aware Interaction (EAI)** system that combines emotion detection with language model–based dialogue generation to simulate emotionally intelligent conversations.  
