@@ -27,7 +27,7 @@ LR = 1e-6
 
 # Model class
 class BERTForRegression(nn.Module):
-    def __init__(self, bert_model_name='bert-base-uncased'):
+    def __init__(self, bert_model_name='disbert-base-uncased'):
         super(BERTForRegression, self).__init__()
         self.bert = BertModel.from_pretrained(bert_model_name)
         self.regression_layer = nn.Linear(self.bert.config.hidden_size, 1)
@@ -38,7 +38,7 @@ class BERTForRegression(nn.Module):
         return self.regression_layer(pooled_output)
 
 def clean_tweet(text):
-
+    """Clean tweet text by removing emojis, special characters, and unnecessary spaces."""
     # Normalize unicode
     text = unicodedata.normalize('NFKD', text)
     
@@ -54,7 +54,10 @@ def clean_tweet(text):
     return text
 
 # Training function
+# Training function
 def train(model, train_loader, val_loader, loss_fn, optimizer, device, save_path, epochs=EPOCHS):
+    # Ensure model is on the correct device
+    model.to(device)
 
     if os.path.exists(save_path):
         checkpoint = torch.load(save_path, map_location=device)
@@ -64,7 +67,6 @@ def train(model, train_loader, val_loader, loss_fn, optimizer, device, save_path
         print(f"📂 Loaded checkpoint with best val loss: {best_val_loss:.4f}")
     else:
         best_val_loss = 1e10
-    model.to(device)
 
     for epoch in range(epochs):
         model.train()
@@ -72,9 +74,9 @@ def train(model, train_loader, val_loader, loss_fn, optimizer, device, save_path
         start_time = time.time()
 
         for batch in train_loader:
-            input_ids = batch[0].to(device)
-            attention_mask = batch[1].to(device)
-            labels = batch[2].to(device)
+            input_ids = batch[0].to(device)  # Ensure input_ids are on the correct device
+            attention_mask = batch[1].to(device)  # Ensure attention_mask is on the correct device
+            labels = batch[2].to(device)  # Ensure labels are on the correct device
 
             if torch.isnan(input_ids).any() or torch.isnan(labels).any():
                 print("⚠️ NaNs detected in training batch")
@@ -82,7 +84,7 @@ def train(model, train_loader, val_loader, loss_fn, optimizer, device, save_path
 
             optimizer.zero_grad()
             outputs = model(input_ids, attention_mask).squeeze()
-            outputs = torch.clamp(outputs, 0.0, 1.0)
+            outputs = torch.clamp(outputs, 0.0, 1.0)  # Ensure outputs are within the desired range
             loss = loss_fn(outputs, labels)
             if torch.isnan(loss):
                 print("⚠️ NaN loss detected during training")
@@ -101,12 +103,12 @@ def train(model, train_loader, val_loader, loss_fn, optimizer, device, save_path
         val_loss = 0.0
         with torch.no_grad():
             for batch in val_loader:
-                input_ids = batch[0].to(device)
-                attention_mask = batch[1].to(device)
-                labels = batch[2].to(device)
+                input_ids = batch[0].to(device)  # Ensure input_ids are on the correct device
+                attention_mask = batch[1].to(device)  # Ensure attention_mask is on the correct device
+                labels = batch[2].to(device)  # Ensure labels are on the correct device
 
                 outputs = model(input_ids, attention_mask).squeeze()
-                outputs = torch.clamp(outputs, 0.0, 1.0)
+                outputs = torch.clamp(outputs, 0.0, 1.0)  # Ensure outputs are within the desired range
                 loss = loss_fn(outputs, labels)
 
                 if torch.isnan(loss):
@@ -119,7 +121,7 @@ def train(model, train_loader, val_loader, loss_fn, optimizer, device, save_path
         print(f"Validation Loss: {avg_val_loss:.4f}")
 
         if not torch.isnan(torch.tensor(avg_val_loss)) and not torch.isinf(torch.tensor(avg_val_loss)):
-            if avg_val_loss < best_val_loss and avg_val_loss!=0:
+            if avg_val_loss < best_val_loss and avg_val_loss != 0:
                 best_val_loss = avg_val_loss
                 torch.save({
                     'model_state_dict': model.state_dict(),
@@ -132,6 +134,7 @@ def train(model, train_loader, val_loader, loss_fn, optimizer, device, save_path
 
         print(f"Epoch Time: {time.time() - start_time:.2f}s")
         print('-' * 60)
+
 
 # Tokenization helper
 def tokenize_data(df, tokenizer):
