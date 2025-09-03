@@ -1,7 +1,10 @@
 # NOTE
+Steps:
+1. Run Dataset_splitter.py first to split data into test,training and validation datasets.
+2. Train the models using "Train.py"
+3. Connect the LM Studio Server API in "Run.py" for responses.
 
-Need to train the models using "Train.py" before using.
-and require LM Studio Server running and connect the API in "Run.py" for responses.
+In code comments are present for better understanding
 
 # 🌌 Emotional-AI
 
